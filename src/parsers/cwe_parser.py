@@ -1,8 +1,6 @@
 # src/parsers/cwe_parser.py
 import xml.etree.ElementTree as ET
 import re
-import zipfile
-from io import BytesIO
 from config import Config
 from parsers.base import BaseParser
 
@@ -21,11 +19,9 @@ class CWEParser(BaseParser):
             return []
         
         results = []
-        # Поиск всех Weakness элементов с namespace
         weaknesses = root.findall(f'.//{{{self.NAMESPACE}}}Weakness')
         print(f"🔍 Найдено элементов Weakness: {len(weaknesses)}")
 
-        # 🔹 Применяем лимит если включён 🔹
         limit = Config.MAX_CWE_RECORDS
         if limit and limit > 0 and len(weaknesses) > limit:
             weaknesses = weaknesses[:limit]
@@ -81,21 +77,22 @@ class CWEParser(BaseParser):
             if desc_elems:
                 item["description"] = self._get_text_content(desc_elems[0])
             
-            # === Related CAPEC ===
-            for attack_pattern in self._find_elements(weakness, "Attack_Pattern"):
-                capec_id = attack_pattern.get("CAPEC_ID")
-                if capec_id:
-                    item["related_capec"].append(f"CAPEC-{capec_id}")
+            # === Related CAPEC (исправлено: Related_Attack_Patterns) ===
+            for rap_container in self._find_elements(weakness, "Related_Attack_Patterns"):
+                for rap in self._find_elements(rap_container, "Related_Attack_Pattern"):
+                    capec_id = rap.get("CAPEC_ID")
+                    if capec_id:
+                        item["related_capec"].append(f"CAPEC-{capec_id}")
             
             # === Mitigation (из Potential_Mitigations) ===
             mitigation_texts = []
             for mitigation_container in self._find_elements(weakness, "Potential_Mitigations"):
                 for mitigation in self._find_elements(mitigation_container, "Mitigation"):
                     text = self._get_text_content(mitigation)
-                    if text and len(text) > 10:
+                    if text:
                         mitigation_texts.append(text)
             if mitigation_texts:
-                # Объединяем первые 3 меры защиты, как в вашем примере
+                # Объединяем первые 3 меры защиты
                 item["mitigation"] = "; ".join(mitigation_texts[:3])
             
             # === Requires Technology (из Applicable_Platforms) ===
@@ -110,11 +107,10 @@ class CWEParser(BaseParser):
                 for detection in self._find_elements(detection_container, "Detection_Method"):
                     method = self._get_text_content(detection).lower().strip()
                     if method:
-                        # Форматируем как в примере: "static_analysis"
                         formatted = method.replace(" ", "_").replace(",", "").replace(".", "")
                         item["detection_methods"].append(formatted)
             
-            # === Перевод (если включён в конфиге) ===
+            # === Перевод (если включён) ===
             if Config.ENABLE_TRANSLATION:
                 if item["name"] and not self._is_russian(item["name"]):
                     item["name"] = self.translator.translate(item["name"])
@@ -123,7 +119,6 @@ class CWEParser(BaseParser):
                 if item["mitigation"] and not self._is_russian(item["mitigation"]):
                     item["mitigation"] = self.translator.translate(item["mitigation"])
                 item["requires_technology"] = self.translator.translate_list(item["requires_technology"])
-                # detection_methods оставляем на английском (технические термины)
             
             # === Очистка значений ===
             cleaned = {}

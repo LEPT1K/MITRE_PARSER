@@ -86,6 +86,7 @@ class CVEParser(BaseParser):
                 "related_cwe": related_cwe,
                 "related_capec": [],
                 "related_mitre": [],
+                "mitigations": [],
                 "requires_service": services,
                 "requires_port": ports,
                 "prerequisites": []

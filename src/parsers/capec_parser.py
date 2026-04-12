@@ -19,11 +19,9 @@ class CAPECParser(BaseParser):
         
         results = []
 
-        # Поиск с полным namespace {uri}tag
         patterns = root.findall(f'.//{{{self.NAMESPACE}}}Attack_Pattern')
         print(f"🔍 Найдено элементов Attack_Pattern: {len(patterns)}")
 
-        # 🔹 Применяем лимит если включён 🔹
         limit = Config.MAX_CAPEC_RECORDS
         if limit and limit > 0 and len(patterns) > limit:
             patterns = patterns[:limit]
@@ -43,7 +41,6 @@ class CAPECParser(BaseParser):
         """Извлекает весь текстовый контент из элемента и всех вложенных тегов"""
         if elem is None:
             return ""
-        # Собираем весь текст рекурсивно
         texts = []
         if elem.text and elem.text.strip():
             texts.append(elem.text.strip())
@@ -51,7 +48,6 @@ class CAPECParser(BaseParser):
             texts.extend(self._get_text_content(child).split('\n'))
             if child.tail and child.tail.strip():
                 texts.append(child.tail.strip())
-        # Фильтруем пустые строки и объединяем
         return ' '.join(t for t in texts if t and t.strip()).strip()
     
     def _find_elements(self, parent, tag_name):
@@ -71,7 +67,7 @@ class CAPECParser(BaseParser):
                 "description": "",
                 "severity": "UNKNOWN",
                 "related_cwe": [],
-                "related_mitre": [],
+                "related_mitre": [],  # будет заполнено в cross_linker
                 "prerequisites": [],
                 "mitigations": []
             }
@@ -92,33 +88,19 @@ class CAPECParser(BaseParser):
                 if cwe_id:
                     item["related_cwe"].append(f"CWE-{cwe_id}")
             
-            # === Related MITRE ATT&CK ===
-            # ⚠️ В официальном CAPEC XML эти ссылки отсутствуют, оставляем пустым
-            for ext_ref in self._find_elements(pattern, "External_Reference"):
-                source_elem = self._find_elements(ext_ref, "Source")
-                id_elem = self._find_elements(ext_ref, "External_ID")
-                if source_elem and id_elem:
-                    source = self._get_text_content(source_elem[0]).upper()
-                    ext_id = self._get_text_content(id_elem[0])
-                    if "ATT&CK" in source and re.match(r'^T\d{4}(\.\d{3})?$', ext_id):
-                        item["related_mitre"].append(ext_id)
-            
             # === Prerequisites ===
             for prereq in self._find_elements(pattern, "Prerequisite"):
                 text = self._get_text_content(prereq)
                 if text:
-                    # Форматируем как в примере: "database_running"
-                    formatted = text.lower().replace(" ", "_").replace(",", "").replace(".", "").replace("(", "").replace(")", "")
-                    item["prerequisites"].append(formatted)
+                    item["prerequisites"].append(text.strip())
             
-            # === Mitigations — ИСПРАВЛЕНО ===
-            # Ищем все Solution_Or_Mitigation внутри Solutions_and_Mitigations
-            mitigation_containers = self._find_elements(pattern, "Solutions_and_Mitigations")
-            for container in mitigation_containers:
-                for mitigation in self._find_elements(container, "Solution_Or_Mitigation"):
+            # === Mitigations ===
+            mitigations_elem = pattern.find(f'{{{self.NAMESPACE}}}Mitigations')
+            if mitigations_elem is not None:
+                for mitigation in mitigations_elem.findall(f'{{{self.NAMESPACE}}}Mitigation'):
                     text = self._get_text_content(mitigation)
-                    if text and len(text) > 15:  # Игнорируем слишком короткие фрагменты
-                        item["mitigations"].append(text)
+                    if text:
+                        item["mitigations"].append(text.strip())
             
             # === Перевод (если включён в конфиге) ===
             if Config.ENABLE_TRANSLATION:
@@ -128,7 +110,7 @@ class CAPECParser(BaseParser):
                     item["description"] = self.translator.translate(item["description"])
                 item["mitigations"] = self.translator.translate_list(item["mitigations"])
             
-            # === Очистка: убираем пробелы в концах значений (ключи уже чистые) ===
+            # === Очистка ===
             cleaned = {}
             for k, v in item.items():
                 if isinstance(v, str):

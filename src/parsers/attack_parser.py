@@ -18,16 +18,28 @@ class ATTCKParser(BaseParser):
             return []
 
         objects = data.get("objects", [])
+        print(f"📦 Всего объектов STIX: {len(objects)}")
+
         obj_map = {obj["id"]: obj for obj in objects if "id" in obj}
+
+        # Строим индекс родительских техник по MITRE ID
+        parent_map = {}
+        for obj in objects:
+            if obj.get("type") == "attack-pattern":
+                for ref in obj.get("external_references", []):
+                    if ref.get("source_name") == "mitre-attack":
+                        mitre_id = ref.get("external_id")
+                        if mitre_id and "." not in mitre_id:
+                            parent_map[mitre_id] = obj
         
         # Индекс связей: technique_id -> [mitigation_ids]
         mitigates_map = defaultdict(list)
         for obj in objects:
             if obj.get("type") == "relationship" and obj.get("relationship_type") == "mitigates":
-                src = obj.get("source_ref")
-                tgt = obj.get("target_ref")
-                if src and tgt:
-                    mitigates_map[src].append(tgt)
+                mitigation_ref = obj.get("source_ref")   # course-of-action
+                technique_ref = obj.get("target_ref")    # attack-pattern
+                if mitigation_ref and technique_ref:
+                    mitigates_map[technique_ref].append(mitigation_ref)
 
         techniques = [obj for obj in objects if obj.get("type") == "attack-pattern"]
         print(f"🔍 Найдено техник ATT&CK: {len(techniques)}")
@@ -39,7 +51,7 @@ class ATTCKParser(BaseParser):
 
         results = []
         for idx, tech in enumerate(techniques):
-            item = self._parse_technique(tech, obj_map, mitigates_map)
+            item = self._parse_technique(tech, obj_map, mitigates_map, parent_map)
             if item:
                 results.append(item)
             if (idx + 1) % 100 == 0:
@@ -48,7 +60,8 @@ class ATTCKParser(BaseParser):
         print(f"📊 Итого записей ATT&CK: {len(results)}")
         return results
 
-    def _parse_technique(self, tech: dict, obj_map: dict, mit_map: dict) -> dict | None:
+    def _parse_technique(self, tech: dict, obj_map: dict, mit_map: dict, parent_map: dict) -> dict | None:
+        
         try:
             tech_id = tech.get("id", "")
             ext_refs = tech.get("external_references", [])
@@ -72,54 +85,52 @@ class ATTCKParser(BaseParser):
                     elif "capec" in src:
                         related_capec.append(f"CAPEC-{ext_id}" if not ext_id.startswith("CAPEC-") else ext_id)
 
-            # === Mitigations (разрешение через relationship -> course-of-action) ===
-            raw_mitigs = []
-            for m_id in mit_map.get(tech_id, []):
-                if m_id in obj_map:
-                    m_obj = obj_map[m_id]
-                    text = m_obj.get("description") or m_obj.get("name", "")
-                    text = self._clean_html(text)
-                    if text and len(text) > 15:
-                        # MITRE разделяет меры защиты двойными переносами строк
-                        for line in text.split("\n\n"):
-                            line = line.strip()
-                            if line:
-                                raw_mitigs.append(line)
+            # === Получение родительской техники (если есть) ===
+            parent_tech = self._get_parent_technique(tech, parent_map)
+            parent_mitre_id = None
+            if parent_tech:
+                parent_ext = parent_tech.get("external_references", [])
+                parent_mitre_id = next((r.get("external_id") for r in parent_ext if r.get("source_name") == "mitre-attack"), None)
 
-            # Fallback: если у подтехники нет mitigations, пробуем взять от родителя (TXXXX)
-            if not raw_mitigs and "." in mitre_id:
-                parent_id = mitre_id.split(".")[0]
-                # Ищем ID родительской техники в obj_map по external_id
-                parent_stix_id = next((oid for oid, obj in obj_map.items() 
-                                     if obj.get("type") == "attack-pattern" and 
-                                     any(r.get("external_id") == parent_id for r in obj.get("external_references", []))), None)
+            # === Mitigations ===
+            raw_mitigations = []
+             # Собираем ID мер защиты для текущей техники
+            mitigation_ids = mit_map.get(tech_id, [])
+            # Если у подтехники нет мер защиты, добавляем меры родителя
+            if not mitigation_ids and parent_tech:
+                parent_stix_id = parent_tech.get("id")
                 if parent_stix_id:
-                    raw_mitigs = []
-                    for m_id in mit_map.get(parent_stix_id, []):
-                        if m_id in obj_map:
-                            text = obj_map[m_id].get("description") or obj_map[m_id].get("name", "")
-                            text = self._clean_html(text)
-                            if text and len(text) > 15:
-                                for line in text.split("\n\n"):
-                                    if line.strip():
-                                        raw_mitigs.append(line.strip())
+                    mitigation_ids = mit_map.get(parent_stix_id, [])
+
+            for m_id in mitigation_ids:
+                m_obj = obj_map.get(m_id)
+                if m_obj:
+                    text = self._extract_mitigation_text(m_obj)
+                    if text:
+                        raw_mitigations.extend([p.strip() for p in text.split('\n\n') if p.strip()])
 
             # === Detection ===
             detection = self._clean_html(tech.get("x_mitre_detection", ""))
-            if not detection and "." in mitre_id:
-                # Fallback detection от родителя
-                parent_id = mitre_id.split(".")[0]
-                parent_stix_id = next((oid for oid, obj in obj_map.items() 
-                                     if obj.get("type") == "attack-pattern" and 
-                                     any(r.get("external_id") == parent_id for r in obj.get("external_references", []))), None)
-                if parent_stix_id:
-                    detection = self._clean_html(obj_map.get(parent_stix_id, {}).get("x_mitre_detection", ""))
+            if not detection and parent_tech:
+                detection = self._clean_html(parent_tech.get("x_mitre_detection", ""))
 
-            # === Базовые поля ===
+            # === Platforms (могут быть унаследованы) ===
             platforms = tech.get("x_mitre_platforms", [])
+            if not platforms and parent_tech:
+                platforms = parent_tech.get("x_mitre_platforms", [])
+
+            # === Description (если пусто, берём у родителя) ===
+            desc = self._clean_html(tech.get("description", ""))
+            if not desc and parent_tech:
+                desc = self._clean_html(parent_tech.get("description", ""))
+
+
+            # === Tactic ===
             phases = tech.get("kill_chain_phases", [])
             tactic = phases[0].get("phase_name", "").replace("-", " ").title() if phases else ""
-            desc = self._clean_html(tech.get("description", ""))
+            if not tactic and parent_tech:
+                parent_phases = parent_tech.get("kill_chain_phases", [])
+                tactic = parent_phases[0].get("phase_name", "").replace("-", " ").title() if parent_phases else ""
 
             item = {
                 "id": mitre_id,
@@ -131,7 +142,7 @@ class ATTCKParser(BaseParser):
                 "related_capec": related_capec,
                 "requires_service": self._extract_services(platforms, desc),
                 "detection": detection,
-                "mitigations": raw_mitigs
+                "mitigations": raw_mitigations
             }
 
             # === Перевод ===
@@ -175,3 +186,17 @@ class ATTCKParser(BaseParser):
 
     def _is_russian(self, text: str) -> bool:
         return bool(re.search(r'[а-яА-ЯёЁ]', text))
+    
+    def _extract_mitigation_text(self, obj: dict) -> str:
+        """Извлекает осмысленный текст из объекта (course-of-action, etc.)"""
+        text = obj.get("description") or obj.get("name") or ""
+        text = self._clean_html(text)
+        return text.strip()
+    
+    def _get_parent_technique(self, tech: dict, parent_map: dict) -> dict | None:
+        ext_refs = tech.get("external_references", [])
+        mitre_id = next((r.get("external_id") for r in ext_refs if r.get("source_name") == "mitre-attack"), "")
+        if "." in mitre_id:
+            parent_id = mitre_id.split(".")[0]
+            return parent_map.get(parent_id)
+        return None
