@@ -7,8 +7,10 @@ class Config:
     
     # 🔹 НАСТРОЙКА ПЕРЕВОДА 🔹
     ENABLE_TRANSLATION = False  # ← Поставьте False для быстрого запуска, True — для перевода
-    TRANSLATE_TO = "ru"
+    TRANSLATE_TO = "ru" # <- Код языка для Русского
     TRANSLATION_DELAY = 1.0     # Задержка между запросами к переводчику (сек)
+    TRANSLATION_BATCH_SIZE = 50 # Сколько строк отправлять за раз (Google позволяет до ~100)
+    TRANSLATION_MAX_RETRIES = 3     # Число повторных попыток при ошибке
     
     # Настройки загрузки
     REQUEST_TIMEOUT = 30
@@ -16,10 +18,10 @@ class Config:
     RETRY_DELAY = 5
 
     # 🔹 Ограничение записей (0 или None = все) 🔹
-    MAX_CAPEC_RECORDS = 1500    # 0 или None = все записи
-    MAX_CWE_RECORDS = 1500      # 0 или None = все записи
-    MAX_CVE_RECORDS = 1500      # 0 или None = все записи
-    MAX_ATTACK_RECORDS = 1500   # 0 или None = все записи
+    MAX_CAPEC_RECORDS = 330   # 0 или None = все записи
+    MAX_CWE_RECORDS = 400     # 0 или None = все записи
+    MAX_CVE_RECORDS = 250     # 0 или None = все записи
+    MAX_ATTACK_RECORDS = 240  # 0 или None = все записи
     
     # Источники данных
     SOURCES = {

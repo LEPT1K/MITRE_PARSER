@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from config import Config
 
 def main():
-    print(f"🚀 MITRE Parser v1.0 | Вывод: {Config.OUTPUT_DIR}")
+    print(f"🚀 MITRE Parser | Вывод: {Config.OUTPUT_DIR}")
     print(f"🌐 Перевод: {'✅ ВКЛЮЧЁН' if Config.ENABLE_TRANSLATION else '⚡ ОТКЛЮЧЁН (быстрый режим)'}")
     
     Config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
